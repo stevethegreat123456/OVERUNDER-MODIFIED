@@ -1,0 +1,12 @@
+services:
+  web:
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Add your environment variables here if resolving .env issues
+      # e.g., GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env

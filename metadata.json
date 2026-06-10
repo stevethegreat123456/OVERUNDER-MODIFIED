@@ -1,0 +1,8 @@
+{
+  "name": "higher lower",
+  "description": "High-frequency trading bot for Deriv synthetic indices.",
+  "requestFramePermissions": [
+    "screen-wake-lock"
+  ],
+  "majorCapabilities": []
+}
