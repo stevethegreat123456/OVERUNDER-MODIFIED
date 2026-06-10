@@ -9,6 +9,7 @@ export interface MarketData {
   underStreak: number;
   streakHistory: number[];
   digitCounts?: number[];
+  transitions?: number[][];
 }
 
 export interface Trade {

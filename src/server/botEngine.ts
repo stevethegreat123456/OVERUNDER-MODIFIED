@@ -48,6 +48,7 @@ let isTradeActive = false;
 let sessionPnL = 0;
 let lastLostSymbol: string | null = null;
 let cumulativeLoss = 0;
+let recoveryTier = 0;
 let stopScheduledAndWaitingForRecovery = false;
 let deadlockTimeoutId: any = null;
 let lastTradeAttemptTime = 0; // Added to prevent concurrent signal processing
@@ -381,6 +382,7 @@ function handleTick(tickInfo: any) {
       const barrierNum = parseInt(lt.barrier, 10);
       if (lt.type === 'OVER' && exitDigit > barrierNum) isWin = true;
       if (lt.type === 'UNDER' && exitDigit < barrierNum) isWin = true;
+      if (lt.type === 'DIFF' && exitDigit !== barrierNum) isWin = true;
 
       expectedCallbacks = 0;
       if (deadlockTimeoutId) {
@@ -389,39 +391,36 @@ function handleTick(tickInfo: any) {
       }
 
       if (isWin) {
-         globalCurrentStake = currentSettings?.globalStake || 1;
-         cumulativeLoss = 0;
-         lastLostSymbol = null;
-         isTradeActive = false;
-         
-         if (stopScheduledAndWaitingForRecovery) {
-           isRunning = false;
-           stopScheduledAndWaitingForRecovery = false;
-           markets.forEach(m => { marketStates[m].overStreak = 0; marketStates[m].underStreak = 0; });
-           postMessage({ type: 'SCHEDULE_STOP' });
+         let estProfit = lt.stake * 0.23;
+         if (lt.type === 'DIFF') estProfit = lt.stake * 0.09;
+         cumulativeLoss -= estProfit;
+
+         if (cumulativeLoss <= 0) {
+             cumulativeLoss = 0;
+             recoveryTier = 0;
+             globalCurrentStake = currentSettings?.globalStake || 1;
+             lastLostSymbol = null;
+             
+             if (stopScheduledAndWaitingForRecovery) {
+               isRunning = false;
+               stopScheduledAndWaitingForRecovery = false;
+               markets.forEach(m => { marketStates[m].overStreak = 0; marketStates[m].underStreak = 0; });
+               postMessage({ type: 'SCHEDULE_STOP' });
+             }
+         } else {
+             recoveryTier = Math.max(1, recoveryTier - 1);
+             const baseStake = currentSettings?.globalStake || 1;
+             globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
          }
+         isTradeActive = false;
       } else {
          cumulativeLoss += lt.stake;
-         globalCurrentStake = currentSettings?.globalStake || 1;
-         lastLostSymbol = symbol;
+         recoveryTier += 1;
+         const baseStake = currentSettings?.globalStake || 1;
+         globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
 
-         if (isRunning) {
-           if (lt.type === 'OVER' && lt.barrier === '1') {
-             isTradeActive = true;
-             lastTradeAttemptTime = Date.now();
-             executeBuy(symbol, 'OVER', '4');
-           } else if (lt.type === 'UNDER' && lt.barrier === '8') {
-             isTradeActive = true;
-             lastTradeAttemptTime = Date.now();
-             executeBuy(symbol, 'UNDER', '5');
-           } else {
-             globalCurrentStake = currentSettings?.globalStake || 1;
-             cumulativeLoss = 0;
-             isTradeActive = false;
-           }
-         } else {
-           isTradeActive = false;
-         }
+         lastLostSymbol = symbol;
+         isTradeActive = false;
       }
     }
   }
@@ -494,10 +493,10 @@ function handleTick(tickInfo: any) {
       let probNext01 = getTransitionPct(digit, 0) + getTransitionPct(digit, 1);
       let probNext89 = getTransitionPct(digit, 8) + getTransitionPct(digit, 9);
 
-      // Instead of hardcoding digit === 5 or 6, we analyze mathematically if the 
-      // Markov transition to a loss given this *current* digit is historically safe (< 10.5%).
-      let canOver1 = macroOver1 && !isMaxMin(digit) && probNext01 < 10.5;
-      let canUnder8 = macroUnder8 && !isMaxMin(digit) && probNext89 < 10.5;
+      // Reverting to the explicit entry digits (5, 6 for OVER 1; 4, 7, 9 for UNDER 8)
+      // but adding the condition that we only enter if the specific entry digit's percentage is < 10.5%
+      let canOver1 = macroOver1 && (digit === 5 || digit === 6) && getPct(digit) < 10.5 && probNext01 < 10.5;
+      let canUnder8 = macroUnder8 && (digit === 4 || digit === 7 || digit === 9) && getPct(digit) < 10.5 && probNext89 < 10.5;
 
       if (canOver1) {
         isTradeActive = true;
@@ -527,7 +526,8 @@ function queueUpdate(symbol: string, state: MarketState) {
     overStreak: state.overStreak,
     underStreak: state.underStreak,
     streakHistory: miniHistory,
-    digitCounts: [...state.digitCounts]
+    digitCounts: [...state.digitCounts],
+    transitions: state.transitions.map(row => [...row])
   };
 
   if (!batchTimeout) {
@@ -798,39 +798,33 @@ function handleContractUpdate(contract: any) {
     }
   
     const batchWin = batchPnL > 0;
-    let recoveryTradeType: 'OVER' | 'UNDER' | null = null;
-    let recoveryBarrier: string | null = null;
 
     if (batchWin) {
-      globalCurrentStake = currentSettings.globalStake || 1;
-      cumulativeLoss = 0;
-      lastLostSymbol = null;
-      
-      if (stopScheduledAndWaitingForRecovery) {
-        isRunning = false;
-        stopScheduledAndWaitingForRecovery = false;
-        markets.forEach(m => { marketStates[m].overStreak = 0; marketStates[m].underStreak = 0; });
-        postMessage({ type: 'SCHEDULE_STOP' });
+      cumulativeLoss -= batchPnL;
+      if (cumulativeLoss <= 0) {
+        cumulativeLoss = 0;
+        recoveryTier = 0;
+        globalCurrentStake = currentSettings.globalStake || 1;
+        lastLostSymbol = null;
+        
+        if (stopScheduledAndWaitingForRecovery) {
+          isRunning = false;
+          stopScheduledAndWaitingForRecovery = false;
+          markets.forEach(m => { marketStates[m].overStreak = 0; marketStates[m].underStreak = 0; });
+          postMessage({ type: 'SCHEDULE_STOP' });
+        }
+      } else {
+        recoveryTier = Math.max(1, recoveryTier - 1);
+        const baseStake = currentSettings.globalStake || 1;
+        globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
       }
     } else {
       cumulativeLoss += Math.abs(batchPnL);
-      globalCurrentStake = currentSettings.globalStake || 1;
+      recoveryTier += 1;
+      const baseStake = currentSettings.globalStake || 1;
+      globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
 
       lastLostSymbol = symbol;
-      if (pending && pending.type && pending.barrier) {
-        if (pending.type === 'OVER' && pending.barrier === '1') {
-          recoveryTradeType = 'OVER';
-          recoveryBarrier = '4';
-        } else if (pending.type === 'UNDER' && pending.barrier === '8') {
-          recoveryTradeType = 'UNDER';
-          recoveryBarrier = '5';
-        } else {
-          // Lost recovery
-          globalCurrentStake = currentSettings.globalStake;
-          cumulativeLoss = 0;
-          recoveryTradeType = null;
-        }
-      }
     }
 
     isTradeActive = false;
@@ -853,11 +847,7 @@ function handleContractUpdate(contract: any) {
       }
     }
 
-    if (recoveryTradeType && recoveryBarrier && isRunning) {
-      isTradeActive = true;
-      lastTradeAttemptTime = Date.now();
-      executeBuy(symbol, recoveryTradeType, recoveryBarrier);
-    }
+    // Immediate recovery trade block removed in favor of Tiered Linear Staking
   } else if (expectedCallbacks <= 0 && isHandledLocally) {
     expectedCallbacks = 0;
     batchPnL = 0;

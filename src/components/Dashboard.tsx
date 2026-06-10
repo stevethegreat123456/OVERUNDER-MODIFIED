@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import { SettingsPanel } from './SettingsPanel';
 import { HistoryPanel } from './HistoryPanel';
+import { MarkovVisualizer } from './MarkovVisualizer';
 import { MarketGrid } from './MarketGrid';
 import { TradeLog } from './TradeLog';
 import { StatsPanel } from './StatsPanel';
@@ -162,6 +163,7 @@ export function Dashboard() {
           )}
         </div>
         <div className="flex gap-2 sm:gap-4 items-center shrink-0 ml-2">
+          <MarkovVisualizer />
           <HistoryPanel />
           <SettingsPanel />
           <button 

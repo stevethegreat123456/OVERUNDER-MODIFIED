@@ -3,7 +3,8 @@ import { useStore } from '../store/useStore';
 import { X, History } from 'lucide-react';
 
 export function TradeLog() {
-  const tradeLog = useStore((state) => state.tradeLog);
+  const tradeLogOriginal = useStore((state) => state.tradeLog);
+  const tradeLog = [...tradeLogOriginal].sort((a, b) => b.timestamp - a.timestamp);
   const [showHistory, setShowHistory] = useState(false);
 
   return (
@@ -70,8 +71,8 @@ export function TradeLog() {
                 <tbody>
                   {tradeLog.map(trade => (
                     <tr key={trade.id} className="hover:bg-white/5 transition-colors group cursor-default">
-                      <td className="py-2 px-3 border-b border-[#27272a]/50 text-[#a1a1aa]">
-                        {new Date(trade.timestamp).toISOString().split('T')[1].slice(0, -1)}
+                      <td className="py-2 px-3 border-b border-[#27272a]/50 text-[#a1a1aa] whitespace-nowrap">
+                        {new Date(trade.timestamp).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' })}  {new Date(trade.timestamp).toISOString().split('T')[1].slice(0, -1)}
                       </td>
                       <td className="py-2 px-3 border-b border-[#27272a]/50 text-[#e4e4e7]">{trade.market}</td>
                       <td className="py-2 px-3 border-b border-[#27272a]/50 text-[#666] group-hover:text-[#a1a1aa]">
