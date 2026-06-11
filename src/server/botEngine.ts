@@ -47,6 +47,7 @@ let globalCurrentStake = 1;
 let isTradeActive = false;
 let sessionPnL = 0;
 let lastLostSymbol: string | null = null;
+let lastLostTradeType: 'OVER' | 'UNDER' | 'DIFF' | null = null;
 let cumulativeLoss = 0;
 let recoveryTier = 0;
 let stopScheduledAndWaitingForRecovery = false;
@@ -391,8 +392,14 @@ function handleTick(tickInfo: any) {
       }
 
       if (isWin) {
-         let estProfit = lt.stake * 0.23;
+         let estProfit = 0;
          if (lt.type === 'DIFF') estProfit = lt.stake * 0.09;
+         else if (lt.type === 'OVER' && barrierNum === 1) estProfit = lt.stake * 0.23;
+         else if (lt.type === 'UNDER' && barrierNum === 8) estProfit = lt.stake * 0.23;
+         else if (lt.type === 'OVER' && barrierNum === 4) estProfit = lt.stake * 0.95;
+         else if (lt.type === 'UNDER' && barrierNum === 5) estProfit = lt.stake * 0.95;
+         else estProfit = lt.stake * 0.95; 
+
          cumulativeLoss -= estProfit;
 
          if (cumulativeLoss <= 0) {
@@ -400,6 +407,7 @@ function handleTick(tickInfo: any) {
              recoveryTier = 0;
              globalCurrentStake = currentSettings?.globalStake || 1;
              lastLostSymbol = null;
+             lastLostTradeType = null;
              
              if (stopScheduledAndWaitingForRecovery) {
                isRunning = false;
@@ -408,16 +416,22 @@ function handleTick(tickInfo: any) {
                postMessage({ type: 'SCHEDULE_STOP' });
              }
          } else {
-             recoveryTier = Math.max(1, recoveryTier - 1);
-             const baseStake = currentSettings?.globalStake || 1;
-             globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
+             recoveryTier += 1;
+             let payoutRate = 0.95; 
+             globalCurrentStake = Math.max(currentSettings?.globalStake || 1, cumulativeLoss / payoutRate);
+             globalCurrentStake = Math.max(0.35, Math.floor(globalCurrentStake * 100) / 100);
          }
          isTradeActive = false;
       } else {
          cumulativeLoss += lt.stake;
          recoveryTier += 1;
-         const baseStake = currentSettings?.globalStake || 1;
-         globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
+         
+         if (lt.type === 'OVER' && barrierNum === 1) lastLostTradeType = 'OVER';
+         else if (lt.type === 'UNDER' && barrierNum === 8) lastLostTradeType = 'UNDER';
+         
+         let targetPayoutRate = 0.95; 
+         globalCurrentStake = Math.max(currentSettings?.globalStake || 1, cumulativeLoss / targetPayoutRate);
+         globalCurrentStake = Math.max(0.35, Math.floor(globalCurrentStake * 100) / 100);
 
          lastLostSymbol = symbol;
          isTradeActive = false;
@@ -465,47 +479,56 @@ function handleTick(tickInfo: any) {
   if (isRunning && currentSettings) {
     const now = Date.now();
     if (!isTradeActive && (now - lastTradeAttemptTime > 1000)) {
-      let totalCounts = state.digitCounts.reduce((a, b) => a + b, 0);
-      let hasData = totalCounts > 1;
-      let maxCount = hasData ? Math.max(...state.digitCounts) : 0;
-      let minCount = hasData ? Math.min(...state.digitCounts) : 0;
-
-      let isMaxMin = (d: number) => {
-        if (!hasData) return false;
-        let c = state.digitCounts[d];
-        return c === maxCount || c === minCount;
-      };
-
-      let getPct = (d: number) => {
-        if (!hasData || totalCounts === 0) return 0;
-        return (state.digitCounts[d] / totalCounts) * 100;
-      };
-
-      let getTransitionPct = (from: number, to: number) => {
-        let totalOut = state.transitions[from].reduce((a, b) => a + b, 0);
-        if (totalOut === 0) return 0;
-        return (state.transitions[from][to] / totalOut) * 100;
-      };
-
-      let macroOver1 = !isMaxMin(0) && !isMaxMin(1) && getPct(0) < 10 && getPct(1) < 10;
-      let macroUnder8 = !isMaxMin(8) && !isMaxMin(9) && getPct(8) < 10 && getPct(9) < 10;
-
-      let probNext01 = getTransitionPct(digit, 0) + getTransitionPct(digit, 1);
-      let probNext89 = getTransitionPct(digit, 8) + getTransitionPct(digit, 9);
-
-      // Reverting to the explicit entry digits (5, 6 for OVER 1; 4, 7, 9 for UNDER 8)
-      // but adding the condition that we only enter if the specific entry digit's percentage is < 10.5%
-      let canOver1 = macroOver1 && (digit === 5 || digit === 6) && getPct(digit) < 10.5 && probNext01 < 10.5;
-      let canUnder8 = macroUnder8 && (digit === 4 || digit === 7 || digit === 9) && getPct(digit) < 10.5 && probNext89 < 10.5;
-
-      if (canOver1) {
+      if (cumulativeLoss > 0 && lastLostSymbol === symbol) {
+        // Immediate recovery entry on every tick
         isTradeActive = true;
         lastTradeAttemptTime = now;
-        executeBuy(symbol, 'OVER', '1');
-      } else if (canUnder8) {
-        isTradeActive = true;
-        lastTradeAttemptTime = now;
-        executeBuy(symbol, 'UNDER', '8');
+        if (lastLostTradeType === 'UNDER') {
+          executeBuy(symbol, 'OVER', '4');
+        } else {
+          executeBuy(symbol, 'UNDER', '5');
+        }
+      } else if (cumulativeLoss === 0 && !stopScheduledAndWaitingForRecovery) {
+        let totalCounts = state.digitCounts.reduce((a, b) => a + b, 0);
+        let hasData = totalCounts > 1;
+        let maxCount = hasData ? Math.max(...state.digitCounts) : 0;
+        let minCount = hasData ? Math.min(...state.digitCounts) : 0;
+
+        let isMaxMin = (d: number) => {
+          if (!hasData) return false;
+          let c = state.digitCounts[d];
+          return c === maxCount || c === minCount;
+        };
+
+        let getPct = (d: number) => {
+          if (!hasData || totalCounts === 0) return 0;
+          return (state.digitCounts[d] / totalCounts) * 100;
+        };
+
+        let getTransitionPct = (from: number, to: number) => {
+          let totalOut = state.transitions[from].reduce((a, b) => a + b, 0);
+          if (totalOut === 0) return 0;
+          return (state.transitions[from][to] / totalOut) * 100;
+        };
+
+        let macroOver1 = !isMaxMin(0) && !isMaxMin(1) && getPct(0) < 10 && getPct(1) < 10;
+        let macroUnder8 = !isMaxMin(8) && !isMaxMin(9) && getPct(8) < 10 && getPct(9) < 10;
+
+        let probNext01 = getTransitionPct(digit, 0) + getTransitionPct(digit, 1);
+        let probNext89 = getTransitionPct(digit, 8) + getTransitionPct(digit, 9);
+
+        let canOver1 = macroOver1 && (digit === 5 || digit === 6) && getPct(digit) < 10.5 && probNext01 < 15.5;
+        let canUnder8 = macroUnder8 && (digit === 4 || digit === 7 || digit === 9) && getPct(digit) < 10.5 && probNext89 < 15.5;
+
+        if (canOver1) {
+          isTradeActive = true;
+          lastTradeAttemptTime = now;
+          executeBuy(symbol, 'OVER', '1');
+        } else if (canUnder8) {
+          isTradeActive = true;
+          lastTradeAttemptTime = now;
+          executeBuy(symbol, 'UNDER', '8');
+        }
       }
     }
   }
@@ -570,7 +593,7 @@ function executeBuyDynamicDiffers(symbol: string, targetDigit: number) {
     resolved: false
   };
 
-  const rawPayloadString = `{"buy":1,"price":${stake},"parameters":{"amount":${stake},"basis":"stake","contract_type":"DIGITDIFF","currency":"USD","duration":1,"duration_unit":"t","symbol":"${symbol}","barrier":"${targetDigit}"},"req_id":${reqId}}`;
+  const rawPayloadString = `{"buy":1,"price":${stake.toFixed(2)},"parameters":{"amount":${stake.toFixed(2)},"basis":"stake","contract_type":"DIGITDIFF","currency":"USD","duration":1,"duration_unit":"t","symbol":"${symbol}","barrier":"${targetDigit}"},"req_id":${reqId}}`;
   
   ws.send(rawPayloadString);
 
@@ -631,7 +654,7 @@ function executeBuy(symbol: string, tradeType: 'OVER' | 'UNDER', barrier: string
   if (!currentSettings || !currentSettings.apiToken) return;
 
   const reqId = reqIdCounter++;
-  const stake = globalCurrentStake;
+  const stake = Math.max(0.35, Math.floor(globalCurrentStake * 100) / 100);
 
   expectedCallbacks = 1;
   batchPnL = 0;
@@ -651,7 +674,7 @@ function executeBuy(symbol: string, tradeType: 'OVER' | 'UNDER', barrier: string
 
   const contractType = tradeType === 'OVER' ? "DIGITOVER" : "DIGITUNDER";
   
-  const rawPayloadString = `{"buy":1,"price":${stake},"parameters":{"amount":${stake},"basis":"stake","contract_type":"${contractType}","currency":"USD","duration":1,"duration_unit":"t","symbol":"${symbol}","barrier":"${barrier}"},"req_id":${reqId}}`;
+  const rawPayloadString = `{"buy":1,"price":${stake.toFixed(2)},"parameters":{"amount":${stake.toFixed(2)},"basis":"stake","contract_type":"${contractType}","currency":"USD","duration":1,"duration_unit":"t","symbol":"${symbol}","barrier":"${barrier}"},"req_id":${reqId}}`;
   
   ws.send(rawPayloadString);
 
@@ -806,6 +829,7 @@ function handleContractUpdate(contract: any) {
         recoveryTier = 0;
         globalCurrentStake = currentSettings.globalStake || 1;
         lastLostSymbol = null;
+        lastLostTradeType = null;
         
         if (stopScheduledAndWaitingForRecovery) {
           isRunning = false;
@@ -814,15 +838,24 @@ function handleContractUpdate(contract: any) {
           postMessage({ type: 'SCHEDULE_STOP' });
         }
       } else {
-        recoveryTier = Math.max(1, recoveryTier - 1);
-        const baseStake = currentSettings.globalStake || 1;
-        globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
+        recoveryTier += 1;
+        let payoutRate = 0.95;
+        globalCurrentStake = Math.max(currentSettings.globalStake || 1, cumulativeLoss / payoutRate);
+        globalCurrentStake = Math.max(0.35, Math.floor(globalCurrentStake * 100) / 100);
       }
     } else {
       cumulativeLoss += Math.abs(batchPnL);
       recoveryTier += 1;
-      const baseStake = currentSettings.globalStake || 1;
-      globalCurrentStake = baseStake + (recoveryTier * baseStake * 0.5);
+      
+      const tradeType = pending.type || (contract.contract_type === 'DIGITOVER' ? 'OVER' : contract.contract_type === 'DIGITUNDER' ? 'UNDER' : null);
+      const barrierNum = parseInt(pending.barrier || contract.barrier || '0', 10);
+      
+      if (tradeType === 'OVER' && barrierNum === 1) lastLostTradeType = 'OVER';
+      else if (tradeType === 'UNDER' && barrierNum === 8) lastLostTradeType = 'UNDER';
+      
+      let targetPayoutRate = 0.95;
+      globalCurrentStake = Math.max(currentSettings.globalStake || 1, cumulativeLoss / targetPayoutRate);
+      globalCurrentStake = Math.max(0.35, Math.floor(globalCurrentStake * 100) / 100);
 
       lastLostSymbol = symbol;
     }

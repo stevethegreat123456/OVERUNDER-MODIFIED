@@ -29,7 +29,7 @@ export function MarketGrid() {
         const macroOver1 = !isMaxMin(0) && !isMaxMin(1) && getPct(0) < 10 && getPct(1) < 10;
         const macroUnder8 = !isMaxMin(8) && !isMaxMin(9) && getPct(8) < 10 && getPct(9) < 10;
 
-        return macroOver1 || macroUnder8 || (isWaitingForRecovery && lastLostSymbol === m.symbol);
+        return macroOver1 || macroUnder8 || lastLostSymbol === m.symbol;
       })
     : marketList;
 
@@ -72,7 +72,7 @@ const MarketCard: React.FC<{ market: MarketData, isWaitingForRecovery: boolean, 
   const history = market.streakHistory.slice(-10);
   while (history.length < 10) history.unshift(-1);
   
-  const inRecoveryThisSymbol = isWaitingForRecovery && lastLostSymbol === market.symbol;
+  const inRecoveryThisSymbol = lastLostSymbol === market.symbol;
 
   const totalHistory = market.digitCounts?.reduce((a, b) => a + b, 0) || 0;
   const getPct = (d: number) => totalHistory === 0 ? 0 : (market.digitCounts![d] / totalHistory) * 100;
@@ -99,29 +99,24 @@ const MarketCard: React.FC<{ market: MarketData, isWaitingForRecovery: boolean, 
 
   const prob5to01 = getTransitionPct(5, 0) + getTransitionPct(5, 1);
   const prob6to01 = getTransitionPct(6, 0) + getTransitionPct(6, 1);
-  const over1MarkovOk = prob5to01 < 10.5 && prob6to01 < 10.5;
+  const over1MarkovOk = prob5to01 < 18.5 && prob6to01 < 18.5;
 
   const prob4to89 = getTransitionPct(4, 8) + getTransitionPct(4, 9);
   const prob7to89 = getTransitionPct(7, 8) + getTransitionPct(7, 9);
   const prob9to89 = getTransitionPct(9, 8) + getTransitionPct(9, 9);
-  const under8MarkovOk = prob4to89 < 10.5 && prob7to89 < 10.5 && prob9to89 < 10.5;
+  const under8MarkovOk = prob4to89 < 18.5 && prob7to89 < 18.5 && prob9to89 < 18.5;
 
   const isHot = macroOver1 || macroUnder8;
 
   return (
-    <div className={`bg-[#111114] border rounded-lg p-4 flex flex-col gap-3 transition-colors ${isHot ? 'border-[#00ff9c]/50 shadow-[0_0_15px_rgba(0,255,156,0.1)]' : 'border-[#27272a]'}`}>
+    <div className={`bg-[#111114] border rounded-lg p-4 flex flex-col gap-3 transition-colors ${inRecoveryThisSymbol ? 'border-[#ff00a0] shadow-[0_0_15px_rgba(255,0,160,0.15)]' : isHot ? 'border-[#00ff9c]/50 shadow-[0_0_15px_rgba(0,255,156,0.1)]' : 'border-[#27272a]'}`}>
       <div className="flex justify-between items-start">
         <div className="font-semibold text-[14px]">
             {market.name}
-            {inRecoveryThisSymbol && (
-              <span className="ml-2 text-[10px] bg-[#ff4b4b]/20 text-[#ff4b4b] px-1.5 py-0.5 rounded font-mono uppercase">
-                Recovery Target
-              </span>
-            )}
         </div>
-        <div className={`text-[10px] flex items-center gap-1 ${isHot ? 'text-[#00ff9c]' : 'text-[#a1a1aa]'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isHot ? 'bg-[#00ff9c]' : 'bg-[#a1a1aa]'}`} /> 
-          {isHot ? 'HOT SETUP' : 'SCANNING'}
+        <div className={`text-[10px] flex items-center gap-1 ${inRecoveryThisSymbol ? 'text-[#ff00a0]' : isHot ? 'text-[#00ff9c]' : 'text-[#a1a1aa]'}`}>
+          <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${inRecoveryThisSymbol ? 'bg-[#ff00a0]' : isHot ? 'bg-[#00ff9c]' : 'bg-[#a1a1aa]'}`} /> 
+          {inRecoveryThisSymbol ? 'RECOVERING' : isHot ? 'HOT SETUP' : 'SCANNING'}
         </div>
       </div>
       
